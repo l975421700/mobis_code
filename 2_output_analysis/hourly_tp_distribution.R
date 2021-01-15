@@ -1,5 +1,27 @@
 
 
+# reimpute new activities? -----------------------------------------------
+
+reimpute = FALSE
+if(isTRUE(reimpute)){
+    mobis_analysis_directory = '/data/students/qigao/mobis_analysis'
+    imputed_activity_incremental_output_path =
+        '/data/mobis/data/enrichments/run_gao/imputed_activity_incremental.RData'
+    imputed_activity_path = '/data/mobis/data/enrichments/run_gao/imputed_activity.RData'
+    source(paste(
+        mobis_analysis_directory,
+        '/r/eth_purpose_imputation/r_module/tp_incremental_impute_function.R',
+        sep=''))
+    tp_increment_imputation(
+        mobis_analysis_directory = mobis_analysis_directory,
+        imputed_activity_incremental_output_path =
+            imputed_activity_incremental_output_path,
+        imputed_activity_path = imputed_activity_path
+    )
+}
+
+
+
 # Directories and namelist specification ---------------------------------
 
 # Time Based Heatmaps: https://www.littlemissdata.com/blog/heatmaps
@@ -17,6 +39,17 @@ monday_weekth_labels <- c(
     'Mar-16', 'Apr-13', 'May-11', 'Jun-08', 'Jul-06', 'Aug-03', 'Aug-31',
     'Sep-28', 'Oct-26', 'Nov-23', 'Dec-21', 'Jan-18', 'Feb-15', 'Mar-15'
 )
+
+monday_weekth_labels_changes <- c(
+    'Aug-31', 'Sep-07', 'Sep-14', 'Sep-21', 'Sep-28', 'Oct-05', 'Oct-12',
+    'Oct-19', 'Oct-26', 'Nov-02', 'Nov-09', 'Nov-16', 'Nov-23', 'Nov-30',
+    'Dec-07', 'Dec-14', 'Dec-21', 'Dec-28', 'Jan-04', 'Jan-11', 'Jan-18',
+    'Jan-25', 'Feb-01', 'Feb-08', 'Feb-15', 'Feb-22', 'Mar-01', 'Mar-08',
+    'Mar-15', 'Mar-22', 'Mar-29', 'Apr-05', 'Apr-12', 'Apr-19', 'Apr-26'
+)
+
+# seq(as.Date("2019-09-02"), to=as.Date("2021-4-30"), by='1 weeks')
+
 heatmap_legend_labels <- c(
     "0","0.05", "0.1", "0.15", "0.2","0.25", "0.3", "0.35", "0.4")
 # monday_weekth[seq(1, 64, 4)]
@@ -321,47 +354,77 @@ for (i in 1:8){
 
 ################################  plot the changes
 
-head(week_hourly_activities)
-head(week_activities_users)
+# head(week_hourly_activities)
+# head(week_activities_users)
 
 # i = 1
-count_i <- c(3, 3, 3, 2, 1, 1, 1, 2)
+count_i <- c(1, 1, 1, 1, 0.5, 0.5, 1, 1)
+cbar_int <- c(0.01, 0.02, 0.02, 0.02, 0.03, 0.03, 0.03, 0.05)
+space_left <- c(0.12, 0.12, 0.12, 0.12, -0.07, -0.07, 0.12, 0.12)
+vadjust <- c(0, 0, 0, 0, -0.7, -0.7, 0, 0)
 for (i in 1:8){
     data1 <- week_hourly_activities[imputed_purpose == activity_categories[i], ]
     
+    data1_previous <- data1[weekth <= (max(weekth) - 52), ]
+    data1_current <- data1[weekth > 52, ]
+    
+    data1_changes <- data.table(
+        weekth = rep(
+            min(data1_current$weekth):max(data1_current$weekth), each = 24),
+        starttime = rep(0:23, times = length(unique(data1_current$weekth)) ),
+        week_hour_freq = 0
+    )
+    for(j in 1:dim(data1_changes)[1]){
+        # j = 300
+        i_current = which(
+            (data1_current$weekth == data1_changes$weekth[j]) &
+                (data1_current$starttime == data1_changes$starttime[j]))
+        i_previous = which(
+            (data1_previous$weekth == (data1_changes$weekth[j] - 52) ) &
+                (data1_previous$starttime == data1_changes$starttime[j]))
+        # check
+        # data1_current$weekth[i_current]; data1_changes$weekth[j]
+        # data1_current$starttime[i_current]; data1_changes$starttime[j]
+        # data1_previous$weekth[i_previous]; data1_changes$weekth[j] - 52
+        # data1_previous$starttime[i_previous]; data1_changes$starttime[j]
+        
+        if ((length(i_current) + length(i_previous)) == 2){
+            data1_changes$week_hour_freq[j] = 
+                data1_current$week_hour_freq[i_current] - 
+                data1_previous$week_hour_freq[i_previous]
+        }
+    }
+    
+    cbar_min <- -(max(abs(data1_changes$week_hour_freq)) %/% cbar_int[i]
+                  + 1) * cbar_int[i]
+    cbar_max <-  (max(abs(data1_changes$week_hour_freq)) %/% cbar_int[i]
+                  + 1) * cbar_int[i]
+    
     png(
-        paste('visualization/2_output_analysis/mobis_1.0.', i,
+        paste('visualization/2_output_analysis/mobis_1.2.', i,
               ' week_hourly heatmap of ',
               activity_categories[i], '_changes.png', sep = ''),
         width = 8.8, height = 8.8, units = 'cm', res = 1200)
     heatmap1 = ggplot() +
         geom_tile(
-            data = data1,
+            data = data1_changes,
             aes(x = weekth, y = starttime, fill = week_hour_freq),
             colour = "white") +
-        geom_vline(xintercept = lockdown, linetype = "dashed",
-                   color = 'black', size = 0.2) +
-        geom_vline(xintercept = post_lockdown, linetype = "dashed",
-                   color = 'black', size = 0.2) +
-        geom_vline(xintercept = mask_requirement, linetype = "dashed",
-                   color = 'black', size = 0.2) +
         geom_vline(xintercept = second_wave, linetype = "dashed",
                    color = 'black', size = 0.2) +
-        scale_fill_gradient(
-            low = "white", high = "blue",
-            limits = c(0, (max(data1$week_hour_freq) %/% 0.05 + 1) * 0.05),
-            breaks=seq(0, (max(data1$week_hour_freq) %/% 0.05 + 1) * 0.05, 0.05),
-            labels=heatmap_legend_labels[
-                1:length(seq(0, (max(data1$week_hour_freq) %/% 0.05 + 1) * 0.05,
-                             0.05))],
+        scale_fill_gradient2(
+            low = "red", mid = "white", high = "blue",
+            limits = c(cbar_min, cbar_max),
+            breaks = seq(cbar_min, cbar_max, cbar_int[i]),
+            labels = seq(cbar_min, cbar_max, cbar_int[i]),
             guide = guide_colourbar(
-                title = paste('Frequency of', activity_categories[i]), 
+                title = paste('Changes in frequency of', activity_categories[i]), 
                 title.position = 'left',
                 title.theme = element_text(size = 8, family = 'Times New Roman'),
                 label.theme = element_text(size = 8, family = 'Times New Roman'),
                 barwidth = unit(
-                    0.8 * (length(seq(0, (max(data1$week_hour_freq) %/% 0.05 + 1
-                    ) * 0.05, 0.05)) - 1), units = "cm"),
+                    0.65 * (length(seq(cbar_min, cbar_max, cbar_int[i])) - 1),
+                    units = "cm"),
                 barheight = unit(0.2, units = "cm"),
                 draw.ulim = TRUE,
                 title.vjust = 1,
@@ -370,12 +433,13 @@ for (i in 1:8){
         ylab("O'clock") +
         theme_bw() + theme_minimal() +
         scale_x_continuous(
-            limits = c(min(week_hourly_activities$weekth) -1,
-                       max(week_hourly_activities$weekth) +1),
+            limits = c(min(data1_changes$weekth) -1,
+                       max(data1_changes$weekth) +1),
             expand = c(0, 0),
-            breaks = seq(1, max(week_hourly_activities$weekth), 4),
-            labels = monday_weekth_labels[
-                1:length(seq(1, max(week_hourly_activities$weekth), 4))] ) +
+            breaks = seq(min(data1_changes$weekth),
+                         max(data1_changes$weekth), 1),
+            labels = monday_weekth_labels_changes[
+                1:(max(data1_changes$weekth) - min(data1_changes$weekth) + 1)]) +
         scale_y_reverse(
             limits = c(23 + 1, 0 - 1),
             expand = c(0, 0),
@@ -402,64 +466,64 @@ for (i in 1:8){
             panel.background = element_blank()
         )
     
-    count_int = count_i[i]
-    
-    if(i < 4){
-        left = 0.08
-    }else{
-        left = 0.22
-    }
+    left = space_left[i]
     
     data2 <- week_activities_users[imputed_purpose == activity_categories[i], ]
+    
+    data2_previous <- data2[weekth <= (max(weekth) - 52), ]
+    data2_current <- data2[weekth > 52, ]
+    
+    data2_changes <- data.table(
+        weekth = min(data1_current$weekth):max(data1_current$weekth),
+        activities_per_user = 0
+        )
+    for(j in 1:dim(data2_changes)[1]){
+        # j = 4
+        i_current = which(data2_current$weekth == data2_changes$weekth[j])
+        i_previous = which(
+            data2_previous$weekth == (data2_changes$weekth[j] - 52))
+        # check
+        # data2_current$weekth[i_current]; data2_changes$weekth[j]
+        # data2_previous$weekth[i_previous]; data2_changes$weekth[j] - 52
+        
+        if ((length(i_current) + length(i_previous)) == 2){
+            data2_changes$activities_per_user[j] = 
+                data2_current$activities_per_user[i_current] - 
+                data2_previous$activities_per_user[i_previous]
+        }
+    }
+    
+    count_int = count_i[i]
+    ymin = (min(data2_changes$activities_per_user) %/% count_int) * count_int
+    ymax = (max(data2_changes$activities_per_user) %/% count_int + 1) * count_int
+    
     timeseries2 <- 
-        ggplot(data = data2,
+        ggplot(data = data2_changes,
                aes(x = weekth, y = activities_per_user, group=1)) +
         geom_line(linetype = "solid", color = 'black', size = 0.2) +
-        geom_vline(xintercept = lockdown, linetype = "dashed",
-                   color = 'black', size = 0.2) +
-        geom_vline(xintercept = post_lockdown, linetype = "dashed",
-                   color = 'black', size = 0.2) +
-        geom_vline(xintercept = mask_requirement, linetype = "dashed",
-                   color = 'black', size = 0.2) +
         geom_vline(xintercept = second_wave, linetype = "dashed",
                    color = 'black', size = 0.2) +
-        geom_text(x=lockdown - 2,
-                  y=(max(data2$activities_per_user) %/% count_int + 1) * count_int / 2,
-                  label="lockdown", angle = 90, color = 'gray',
-                  fontface = 'plain', size = 2.4, family = 'Times New Roman') + 
-        geom_text(x=post_lockdown - 2,
-                  y=(max(data2$activities_per_user) %/% count_int + 1) * count_int/2,
-                  label="post lockdown", angle = 90, color = 'gray',
-                  fontface = 'plain', size = 2.4, family = 'Times New Roman') + 
-        geom_text(x=mask_requirement - 2,
-                  y=(max(data2$activities_per_user) %/% count_int + 1) * count_int/2,
-                  label="mask requirement", angle = 90, color = 'gray',
-                  fontface = 'plain', size = 2.4, family = 'Times New Roman') + 
-        geom_text(x=second_wave - 2,
-                  y=(max(data2$activities_per_user) %/% count_int + 1) * count_int/2,
+        geom_text(x=second_wave - 0.5,
+                  y=(ymin + ymax)/2,
                   label="second wave", angle = 90, color = 'gray',
                   fontface = 'plain', size = 2.4, family = 'Times New Roman') + 
         ylab('Count / (user * week)') +
         theme_bw() + theme_minimal() +
         scale_x_continuous(
-            limits = c(min(week_hourly_activities$weekth) -1,
-                       max(week_hourly_activities$weekth) +1),
+            limits = c(min(data2_changes$weekth) -1,
+                       max(data2_changes$weekth) +1),
             expand = c(0, 0),
-            breaks = seq(1, max(week_hourly_activities$weekth), 4)
+            breaks = seq(min(data1_changes$weekth),
+                         max(data1_changes$weekth), 1)
         ) +
         scale_y_continuous(
-            limits = c(0, (max(data2$activities_per_user) %/% count_int + 1
-            ) * count_int),
+            limits = c(ymin, ymax),
             expand = c(0, 0),
-            breaks = seq(0, (max(data2$activities_per_user) %/% count_int + 1
-            ) * count_int, 
-            count_int),
-            labels = seq(0, (max(data2$activities_per_user) %/% count_int + 1
-            ) * count_int,
-            count_int)/1 ) +
+            breaks = seq(ymin, ymax, count_int),
+            labels = seq(ymin, ymax, count_int)) +
         theme(
             axis.title.y = element_text(
-                size = 8, family = 'Times New Roman'),
+                size = 8, family = 'Times New Roman', vjust = vadjust[i]),
             text = element_text(size = 8, family = 'Times New Roman'),
             axis.text.y = element_text(
                 size = 8, family = 'Times New Roman', hjust = 1),
@@ -523,22 +587,26 @@ activity_duration <- function(starttime, endtime){
 #     round(allnew_activities$started_at_local[i], units="hours"),
 #     round(allnew_activities$finished_at_local[i], units="hours"), "hour"))
 
-# for(i in 1:217){
-#     i=48
+# for(i in 1:220){
+#     # i=48
 #     ddd <- allnew_activities[((i-1)*10000) + (1:10000), ]
-#     for(j in 1:100){
-#         j = 4
+#     
+#     ddd <- allnew_activities[2200000:2208211, ]
+#     for(j in 1:82){
+#         # j = 4
 #         ccc <- ddd[((j-1)*100) + (1:100), ]
-#         for(k in 1:100){
-#             k=37
-#             eee <- ccc[k, ]
-#             expanded_activities <- eee[
-#                 , .(time = activity_duration(started_at_local, finished_at_local)),
-#                 by = c('ID', 'user_id', 'started_at_local', 'finished_at_local',
-#                        'imputed_purpose')
-#                 ]
-#             print(k)
-#         }
+#         
+#         ccc <- ddd[8200:8212, ]
+#         # for(k in 1:100){
+#         #     k=37
+#         #     eee <- ccc[k, ]
+#         #     expanded_activities <- eee[
+#         #         , .(time = activity_duration(started_at_local, finished_at_local)),
+#         #         by = c('ID', 'user_id', 'started_at_local', 'finished_at_local',
+#         #                'imputed_purpose')
+#         #         ]
+#         #     print(k)
+#         # }
 #         expanded_activities <- ccc[
 #             , .(time = activity_duration(started_at_local, finished_at_local)),
 #             by = c('ID', 'user_id', 'started_at_local', 'finished_at_local',
@@ -546,6 +614,7 @@ activity_duration <- function(starttime, endtime){
 #             ]
 #         print(j)
 #     }
+#     
 #     expanded_activities <- ddd[
 #         , .(time = activity_duration(started_at_local, finished_at_local)),
 #         by = c('ID', 'user_id', 'started_at_local', 'finished_at_local',
@@ -554,12 +623,36 @@ activity_duration <- function(starttime, endtime){
 #     print(i)
 # }
 
+Sys.time()
+ite_num = dim(allnew_activities)[1] %/% 10000 + 1
+for(i in 1:ite_num){
+    if(i < ite_num){
+        ite_allnew_activities <- allnew_activities[((i-1)*10000) + (1:10000), ]
+    }else{
+        ite_allnew_activities <- allnew_activities[
+            ((ite_num-1)*10000 + 1):dim(allnew_activities)[1], ]
+    }
+    
+    ite_expanded_activities <- ite_allnew_activities[
+        , .(time = activity_duration(started_at_local, finished_at_local)),
+        by = c('ID', 'user_id', 'started_at_local', 'finished_at_local',
+               'imputed_purpose')
+        ]
+    if(i == 1){
+        expanded_activities = ite_expanded_activities
+    }else{
+        expanded_activities = rbind(
+            expanded_activities, ite_expanded_activities)
+    }
+    print(paste(i, ite_num, sep='/'))
+}
+Sys.time()
 
-expanded_activities <- allnew_activities[
-    , .(time = activity_duration(started_at_local, finished_at_local)),
-    by = c('ID', 'user_id', 'started_at_local', 'finished_at_local',
-           'imputed_purpose')
-]
+# expanded_activities <- allnew_activities[
+#     , .(time = activity_duration(started_at_local, finished_at_local)),
+#     by = c('ID', 'user_id', 'started_at_local', 'finished_at_local',
+#            'imputed_purpose')
+# ]
 
 save(expanded_activities,
      file = '/data/students/qigao/scratch/2_output_analysis/expanded_activities.RData')
@@ -603,11 +696,13 @@ week_hourly_activities <- week_hourly_activities[weekth != max(weekth), ]
 week_activities_users <- week_activities_users[weekth != max(weekth), ]
 
 
-#### plot the results
+################################  plot the results
 
 # i = 1
 count_i <- c(25, 10, 10, 2, 2, 1, 4, 5)
 freq_i <- c(0.02, 0.03, 0.03, 0.04, 0.03, 0.03, 0.03, 0.04)
+space_left <- c(0.06, 0.2, 0.2, 0.2, 0.2, 0.34, 0.2, 0.2)
+
 for (i in 1:8){
     freq_int <- freq_i[i]
     data1 <- week_hourly_activities[imputed_purpose == activity_categories[i], ]
@@ -688,11 +783,8 @@ for (i in 1:8){
         )
     
     count_int = count_i[i]
-    if(i == 1){
-        left = 0.06
-    }else{
-        left = 0.2
-    }
+    left = space_left[i]
+    
     data2 <- week_activities_users[imputed_purpose == activity_categories[i], ]
     timeseries2 <- 
         ggplot(data = data2,
@@ -771,10 +863,205 @@ for (i in 1:8){
 }
 
 
+################################  plot the changes
 
+# head(week_hourly_activities)
+# head(week_activities_users)
 
-# Heatmap and time series of all activities (entire duration)_cha --------
+# i = 1
+count_i <- c(10, 4, 3, 1, 1, 1, 2, 4)
+freq_i <- c(0.003, 0.004, 0.008, 0.01, 0.016, 0.03, 0.02, 0.02)
+space_left <- c(0.2, 0.2, 0.1, 0.32, 0.24, 0.24, 0.24, 0.12)
+vadjust <- c(1, 1, 1, 1, 1, 1, 1, 1)
 
+for (i in 1:8){
+    freq_int <- freq_i[i]
+    count_int = count_i[i]
+    left = space_left[i]
+    vadj = vadjust[i]
+    
+    data1 <- week_hourly_activities[imputed_purpose == activity_categories[i], ]
+    data1_previous <- data1[weekth <= (max(weekth) - 52), ]
+    data1_current <- data1[weekth > 52, ]
+    
+    data1_changes <- data.table(
+        weekth = rep(
+            min(data1_current$weekth):max(data1_current$weekth), each = 24),
+        starttime = rep(0:23, times = length(unique(data1_current$weekth)) ),
+        week_hour_freq = 0
+    )
+    
+    for(j in 1:dim(data1_changes)[1]){
+        # j = 300
+        i_current = which(
+            (data1_current$weekth == data1_changes$weekth[j]) &
+                (data1_current$starttime == data1_changes$starttime[j]))
+        i_previous = which(
+            (data1_previous$weekth == (data1_changes$weekth[j] - 52) ) &
+                (data1_previous$starttime == data1_changes$starttime[j]))
+        # check
+        # data1_current$weekth[i_current]; data1_changes$weekth[j]
+        # data1_current$starttime[i_current]; data1_changes$starttime[j]
+        # data1_previous$weekth[i_previous]; data1_changes$weekth[j] - 52
+        # data1_previous$starttime[i_previous]; data1_changes$starttime[j]
+        
+        if ((length(i_current) + length(i_previous)) == 2){
+            data1_changes$week_hour_freq[j] =
+                data1_current$week_hour_freq[i_current] -
+                data1_previous$week_hour_freq[i_previous]
+        }
+    }
+    
+    cbar_min <- -(max(abs(data1_changes$week_hour_freq)) %/% freq_int
+                  + 1) * freq_int
+    cbar_max <-  (max(abs(data1_changes$week_hour_freq)) %/% freq_int
+                  + 1) * freq_int
+    
+    png(
+        paste('visualization/2_output_analysis/mobis_1.3.', i,
+              ' week_hourly heatmap of ',
+              activity_categories[i], '_entire_duration_changes.png', sep = ''),
+        width = 8.8, height = 8.8, units = 'cm', res = 1200)
+    
+    heatmap1 = ggplot() +
+        geom_tile(
+            data = data1_changes,
+            aes(x = weekth, y = starttime, fill = week_hour_freq),
+            colour = "white") +
+        geom_vline(xintercept = second_wave, linetype = "dashed",
+                   color = 'black', size = 0.2) +
+        scale_fill_gradient2(
+            low = "red", mid = "white", high = "blue",
+            limits = c(cbar_min, cbar_max),
+            breaks = seq(cbar_min, cbar_max, freq_int),
+            labels = seq(cbar_min, cbar_max, freq_int) * 10^3,
+            guide = guide_colourbar(
+                title = bquote('Changes in frequency' ~ 10^-3 ~
+                'of' ~ .(activity_categories[i]) ~ 'hours'),
+                title.position = 'left',
+                title.theme = element_text(size = 8, family = 'Times New Roman'),
+                label.theme = element_text(size = 8, family = 'Times New Roman'),
+                barwidth = unit(
+                    0.5 * (length(seq(cbar_min, cbar_max, freq_int)) - 1),
+                    units = "cm"),
+                barheight = unit(0.2, units = "cm"),
+                draw.ulim = TRUE,
+                title.vjust = 1,
+                direction = 'horizontal'
+            )) +
+        ylab("O'clock") +
+        theme_bw() + theme_minimal() +
+        scale_x_continuous(
+            limits = c(min(data1_changes$weekth) -1,
+                       max(data1_changes$weekth) +1),
+            expand = c(0, 0),
+            breaks = seq(min(data1_changes$weekth),
+                         max(data1_changes$weekth), 1),
+            labels = monday_weekth_labels_changes[
+                1:(max(data1_changes$weekth) - min(data1_changes$weekth) + 1)]) +
+        scale_y_reverse(
+            limits = c(23 + 1, 0 - 1),
+            expand = c(0, 0),
+            breaks = seq(21, 0, -3),
+            labels = seq(21, 0, -3)
+        ) + 
+        theme(
+            axis.title.y = element_text(
+                size = 8, family = 'Times New Roman'),
+            axis.text.x = element_text(
+                size = 8, family = 'Times New Roman', vjust = 0.75, angle = 45),
+            axis.text.y = element_text(
+                size = 8, family = 'Times New Roman', hjust = 1),
+            axis.ticks = element_line(size = 0.2),
+            axis.title.x = element_blank(),
+            panel.spacing.x = unit(0, "cm"),
+            legend.position = c(0.45, -0.25),
+            legend.background = element_blank(),
+            # (top, right, bottom, left)
+            plot.margin = unit(c(0.01, 0.3, 0.6, 0.2), "cm"),
+            panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank(),
+            panel.border = element_rect( colour = "black", fill=NA, size=0.1),
+            panel.background = element_blank()
+        )
+    
+    data2 <- week_activities_users[imputed_purpose == activity_categories[i], ]
+    
+    data2_previous <- data2[weekth <= (max(weekth) - 52), ]
+    data2_current <- data2[weekth > 52, ]
+    data2_changes <- data.table(
+        weekth = min(data2_current$weekth):max(data2_current$weekth),
+        activityhours_per_user = 0
+    )
+    
+    for(j in 1:dim(data2_changes)[1]){
+        # j = 4
+        i_current = which(data2_current$weekth == data2_changes$weekth[j])
+        i_previous = which(
+            data2_previous$weekth == (data2_changes$weekth[j] - 52))
+        # check
+        # data2_current$weekth[i_current]; data2_changes$weekth[j]
+        # data2_previous$weekth[i_previous]; data2_changes$weekth[j] - 52
+        
+        if ((length(i_current) + length(i_previous)) == 2){
+            data2_changes$activityhours_per_user[j] =
+                data2_current$activityhours_per_user[i_current] -
+                data2_previous$activityhours_per_user[i_previous]
+        }
+    }
+    
+    ymin = (min(data2_changes$activityhours_per_user) %/% count_int) * count_int
+    ymax = (max(data2_changes$activityhours_per_user) %/% count_int + 1) * count_int
+    
+    timeseries2 <- 
+        ggplot(data = data2_changes,
+               aes(x = weekth, y = activityhours_per_user, group=1)) +
+        geom_line(linetype = "solid", color = 'black', size = 0.2) +
+        geom_vline(xintercept = second_wave, linetype = "dashed",
+                   color = 'black', size = 0.2) +
+        geom_text(x=second_wave - 0.5,
+                  y=(ymin + ymax)/2,
+                  label="second wave", angle = 90, color = 'gray',
+                  fontface = 'plain', size = 2.4, family = 'Times New Roman') + 
+        ylab('Hours / (user * week)') +
+        theme_bw() + theme_minimal() +
+        scale_x_continuous(
+            limits = c(min(data2_changes$weekth) -1,
+                       max(data2_changes$weekth) +1),
+            expand = c(0, 0),
+            breaks = seq(min(data2_changes$weekth),
+                         max(data2_changes$weekth), 1)
+        ) +
+        scale_y_continuous(
+            limits = c(ymin, ymax),
+            expand = c(0, 0),
+            breaks = seq(ymin, ymax, count_int),
+            labels = seq(ymin, ymax, count_int)) +
+        theme(
+            axis.title.y = element_text(
+                size = 8, family = 'Times New Roman', vjust = vadj),
+            text = element_text(size = 8, family = 'Times New Roman'),
+            axis.text.y = element_text(
+                size = 8, family = 'Times New Roman', hjust = 1),
+            axis.ticks = element_line(size = 0.1),
+            axis.text.x = element_blank(),
+            axis.title.x = element_blank(),
+            panel.spacing.x = unit(0, "cm"),
+            legend.position = c(0.45, -0.25),
+            legend.background = element_blank(),
+            # (top, right, bottom, left)
+            plot.margin = unit(c(0.2, 0.3, 0.02, left), "cm"),
+            panel.grid.major = element_blank(),
+            panel.grid.minor = element_blank(),
+            panel.border = element_rect( colour = "black", fill=NA, size=0.1),
+            panel.background = element_blank()
+        )
+    
+    gridExtra::grid.arrange(
+        timeseries2, heatmap1, ncol = 1, heights = c(2.4, 6.4), newpage = TRUE)
+    dev.off()
+    print(i)
+}
 
 
 
