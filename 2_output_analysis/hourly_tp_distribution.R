@@ -875,6 +875,7 @@ space_left <- c(0.2, 0.2, 0.1, 0.32, 0.24, 0.24, 0.24, 0.12)
 vadjust <- c(1, 1, 1, 1, 1, 1, 1, 1)
 
 for (i in 1:8){
+    # i=1
     freq_int <- freq_i[i]
     count_int = count_i[i]
     left = space_left[i]

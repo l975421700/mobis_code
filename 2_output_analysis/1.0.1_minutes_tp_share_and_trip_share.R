@@ -1,9 +1,10 @@
 
 # whether to reimpute activities
-reimpute = FALSE
+reimpute <- FALSE
 
 # whether it is debug run
-debug_run = FALSE
+debug_run <- FALSE
+debug_run_trip <- TRUE
 
 # whether to focus on activities in Swiss
 i_inswiss <- TRUE
@@ -275,6 +276,152 @@ save(minutes_share,
 
 # estimate trip minutes in each timeslot ---------------------------------
 
+legs_path = '/data/mobis/data/csv/legs.csv'
+covid_legs_glob = '/data/mobis/data/covid/*[0-9]'
+
+
+legs <- readr::read_delim(legs_path, delim = ',', n_max = Inf)
+# legs1 <- readr::read_delim(legs_path, delim = ',', n_max = Inf,
+#                           locale=readr::locale(tz='Europe/Zurich'),
+#                           col_types = cols(trip_id = col_character()))
+legs <- as.data.table(legs)
+
+# combine original mobis and covid activities
+covid_legs_paths <- Sys.glob(covid_legs_glob)
+for(i in 1:length(covid_legs_paths)){
+    covid_legs <- readr::read_delim(
+        paste(covid_legs_paths[i], '/covid_legs.csv', sep=''),
+        delim = ',', n_max = Inf)
+    covid_legs <- as.data.table(covid_legs)
+    
+    if(i == 1){
+        all_legs <- data.table::rbindlist(
+            list(legs[, .SD, .SDcol = colnames(covid_legs)], covid_legs)
+        )
+    }else{
+        all_legs <- data.table::rbindlist(
+            list(all_legs, covid_legs)
+        )
+    }
+}
+
+
+colnames(all_legs)[colnames(all_legs) == "trip_id"] <- 'ID'
+
+if(isTRUE(debug_run_trip)){
+    all_legs = all_legs[1:40000, ]
+}
+
+# all_legs = all_legs[1500:2500, ]
+
+# transform wkb geometry data into longitude+latitude
+all_legs <- cbind(all_legs, wkb2lonlat(all_legs$start_point, suffix = 'start'))
+all_legs <- cbind(all_legs, wkb2lonlat(all_legs$end_point, suffix = 'end'))
+
+# transform UTC time to local time
+all_legs$started_at_local <- utc2local_time(
+    all_legs$started_at, all_legs$start_sf)
+all_legs$finished_at_local <- utc2local_time(
+    all_legs$finished_at, all_legs$end_sf)
+
+
+if(isTRUE(i_inswiss)){
+    # import kanton shapefile
+    swiss_kanton <- rgdal::readOGR(
+        '~/scratch/geo/swiss/ch_boundaries/swissBOUNDARIES3D_1_3_TLM_KANTONSGEBIET.shp')
+    swiss_kanton <- sp::spTransform(
+        swiss_kanton, sp::CRS('+proj=longlat +datum=WGS84 +ellps=WGS84') )
+    
+    # locate start point
+    start_legs_sf <- all_legs[, .(ID, start_lon, start_lat)]
+    sp::coordinates(start_legs_sf) <- ~ start_lon + start_lat
+    sp::proj4string(start_legs_sf) <- '+proj=longlat +datum=WGS84 +ellps=WGS84'
+    start_point_polygon <- sp::over(start_legs_sf, swiss_kanton)
+    
+    # locate end point
+    end_legs_sf <- all_legs[, .(ID, end_lon, end_lat)]
+    sp::coordinates(end_legs_sf) <- ~ end_lon + end_lat
+    sp::proj4string(end_legs_sf) <- '+proj=longlat +datum=WGS84 +ellps=WGS84'
+    end_point_polygon <- sp::over(end_legs_sf, swiss_kanton)
+    
+    # select legs in swiss
+    all_legs = all_legs[
+        (!is.na(as.character(start_point_polygon$NAME))) &
+            (!is.na(as.character(end_point_polygon$NAME))),
+    ]
+}
+
+rm(start_point_polygon, end_point_polygon)
+
+
+################################ minutes_share_of_trips
+
+start_min_t = floor_datetime(min(all_legs$started_at_local), 15 * 60)
+end_min_t = floor_datetime(max(all_legs$finished_at_local), 15 * 60)
+
+
+minutes_share_t = data.table(
+    timeslot=seq(start_min_t, end_min_t, by=60 * 15), Count = 0
+)
+
+# expand trips to minutes interval
+
+Sys.time()
+ite_num = dim(all_legs)[1] %/% 10000 + 1
+
+for(i in 1:ite_num){
+    begintime = Sys.time()
+    # i=1
+    
+    # iterate over data table
+    if(i < ite_num){
+        ite_all_legs <- all_legs[((i-1)*10000) + (1:10000), ]
+    }else{
+        ite_all_legs <- all_legs[((ite_num-1)*10000 + 1):dim(all_legs)[1], ]
+    }
+    
+    
+    # expand trips to each minutes
+    ite_expanded_legs <- ite_all_legs[
+        , .(minute = activity_minutes(started_at_local, finished_at_local)),
+        by = c('ID')
+        ]
+    
+    # add 15 minutes time slot
+    ite_expanded_legs$by15 = floor_datetime(
+        ite_expanded_legs$minute, 15 * 60)
+    
+    # aggregate count of legs in each timeslot
+    ite_timeslot_legs_count = ite_expanded_legs[
+        , .(timeslot_count = .N), by = c('by15')
+        ]
+    
+    # store the count
+    for(j in 1:dim(ite_timeslot_legs_count)[1]){
+        # j = 1
+        # ite_timeslot_legs_count[j, ]
+        row_index = which(minutes_share_t$timeslot ==
+                              ite_timeslot_legs_count[j, ]$by15)
+        # minutes_share_t[row_index, ]
+        set(minutes_share_t, i = row_index,
+            j = 2L,
+            minutes_share_t[row_index, 2L] +
+                ite_timeslot_legs_count[j, ]$timeslot_count)
+    }
+    
+    print(paste(i, ite_num,
+                as.numeric(Sys.time() - begintime, units = "secs"), sep='/'))
+}
+Sys.time()
+
+save(minutes_share_t,
+     file = '/data/students/qigao/scratch/2_output_analysis/minutes_share_t.RData')
+
+# check
+# summary(minutes_share_t)
+
+
+
 
 
 # aggregate weekly 15min activities --------------------------------------
@@ -335,19 +482,135 @@ weekly_minutes$Education_share =
 weekly_minutes <- weekly_minutes[weekth != max(weekth), ]
 
 
+# aggregate weekly 15min trips -------------------------------------------
+
+
+load('/data/students/qigao/scratch/2_output_analysis/minutes_share_t.RData')
+
+
+################ calculate the #th of day and week
+minutes_share_t$dayth <- ceiling(as.numeric(difftime(
+    minutes_share_t$timeslot,
+    mobis_start_date, units='days')))
+minutes_share_t$weekth <- (minutes_share_t$dayth - 1) %/% 7 + 1
+
+
+################ calculate the #th of hour_minute
+minutes_share_t$hour <- lubridate::hour(minutes_share_t$timeslot)
+minutes_share_t$minute <- lubridate::minute(minutes_share_t$timeslot)
+
+minutes_share_t$hour_minute_th <-
+    minutes_share_t$hour * 4 +
+    minutes_share_t$minute / 15 + 1
+
+
+################ aggregate activities for each week and hour_minute
+weekly_minutes_t <- minutes_share_t[
+    , .(Trip_Total = sum(Count)),
+    by = c('weekth', 'hour_minute_th')
+    ]
+
+# sum(minutes_share_t$Count) == sum(weekly_minutes_t$Total)
+
+
+################ calculate the minutes share
+
+
+
+
+################ remove the latest week
+
+weekly_minutes_t <- weekly_minutes_t[weekth != max(weekth), ]
+
+
+
 # plot_the_results -------------------------------------------------------
 
+################################ order the minutes share
+weekly_minutes = weekly_minutes[order(weekth, hour_minute_th)]
+weekly_minutes_t = weekly_minutes_t[order(weekth, hour_minute_th)]
+
+
+################################ calculate the transparency
+transparency = data.table::merge.data.table(
+    weekly_minutes[, .SD, .SDcol = c('weekth', 'hour_minute_th', 'Total')],
+    weekly_minutes_t,
+    by = c('weekth', 'hour_minute_th')
+)
+
+################################ calculate the share
+act_home_share = weekly_minutes$Home_share
+act_work_edu_share = weekly_minutes$Leisure_share + 
+    weekly_minutes$Shopping_share +
+    weekly_minutes$Errand_share + weekly_minutes$Other_share +
+    weekly_minutes$Assistance_share
+act_others_share = weekly_minutes$Work_share + weekly_minutes$Education_share
+act_share = (transparency$Trip_Total / transparency$Total)
+
+################################ construct RGB
 rgb_colors = rgb(
-    red = weekly_minutes$Home_share,
-    green = weekly_minutes$Leisure_share + weekly_minutes$Shopping_share +
-        weekly_minutes$Errand_share + weekly_minutes$Other_share +
-        weekly_minutes$Assistance_share,
-    blue = weekly_minutes$Work_share + weekly_minutes$Education_share
+    red = act_home_share / 1.5,
+    green = act_work_edu_share,
+    blue = act_others_share,
+    alpha = 1 - act_share
+)
+
+rgb_colors1 = rgb(
+    red = act_home_share / 1.5,
+    green = act_work_edu_share,
+    blue = act_others_share,
+    alpha = 1 - 2 * act_share
+)
+
+rgb_colors2 = rgb(
+    red = act_home_share / 1.5,
+    green = act_work_edu_share,
+    blue = act_others_share,
+    alpha = 1 - 1.5 * act_share
+)
+
+rgb_colors3 = rgb(
+    red = rep(0, length(weekly_minutes$Home_share)),
+    green = rep(0, length(weekly_minutes$Home_share)),
+    blue = rep(0, length(weekly_minutes$Home_share)),
+    alpha = 1 - 2 * act_share
+)
+
+rgb_colors4 = rgb(
+    red = act_home_share / 1.5,
+    green = act_work_edu_share,
+    blue = act_others_share,
+    alpha = 1 - 2.5 * (transparency$Trip_Total / 
+                         (transparency$Total + transparency$Trip_Total))
+)
+
+rgb_colors5 = rgb(
+    red = rep(0, length(weekly_minutes$Home_share)),
+    green = rep(0, length(weekly_minutes$Home_share)),
+    blue = rep(0, length(weekly_minutes$Home_share)),
+    alpha = 1 - 2.3 * (transparency$Trip_Total / 
+                         (transparency$Total + transparency$Trip_Total))
+)
+
+rgb_colors6 = rgb(
+    red = rep(0, length(weekly_minutes$Home_share)),
+    green = rep(0, length(weekly_minutes$Home_share)),
+    blue = rep(0, length(weekly_minutes$Home_share)),
+    alpha = 1 - 2.5 * (transparency$Trip_Total / 
+                           (transparency$Total + transparency$Trip_Total))
 )
 
 
-################ plot the minutes share
-png('visualization/01_minutes_share/1.0.0_minutes_share_of_activities.png',
+################################ plot the minutes share
+
+png(
+    # 'visualization/01_minutes_share/1.2.0_minutes_share_of_activities__trips_in_transparency.png',
+    # 'visualization/01_minutes_share/1.2.1_minutes_share_of_activities__trips_in_doubled_transparency.png',
+    # 'visualization/01_minutes_share/1.2.2_minutes_share_of_activities__trips_in_1.5_transparency.png',
+    # 'visualization/01_minutes_share/1.2.3_minutes_share_of_activities__only_doubled_transparency.png',
+    'visualization/01_minutes_share/1.2.5_minutes_share_of_activities__trips_share_in_2.5_transparency.png',
+    # 'visualization/01_minutes_share/1.2.6_minutes_share_of_activities__trips_share_only_2.3_transparency.png',
+    # 'visualization/01_minutes_share/1.2.7_minutes_share_of_activities__trips_share_only_2.5_transparency.png',
     width = 8.8, height = 8.8, units = 'cm', res = 600)
 ggplot() +
     geom_tile(
@@ -362,11 +625,18 @@ ggplot() +
                color = 'black', size = 0.2) +
     geom_vline(xintercept = second_wave, linetype = "dashed",
                color = 'black', size = 0.2) +
-    scale_fill_manual(values = rgb_colors) +
+    # scale_fill_manual(values = rgb_colors) +
+    # scale_fill_manual(values = rgb_colors1) +
+    # scale_fill_manual(values = rgb_colors2) +
+    # scale_fill_manual(values = rgb_colors3) +
+    scale_fill_manual(values = rgb_colors4) +
+    # scale_fill_manual(values = rgb_colors5) +
+    # scale_fill_manual(values = rgb_colors6) +
     ylab("O'clock") +
     theme_bw() + theme_minimal() +
     scale_x_continuous(
-        limits = c(min(weekly_minutes$weekth) -1, max(weekly_minutes$weekth) +1),
+        limits = c(min(weekly_minutes$weekth) -1, 
+                   max(weekly_minutes$weekth) +1),
         expand = c(0, 0),
         breaks = seq(1, max(weekly_minutes$weekth), 4),
         labels = monday_weekth_labels[
@@ -400,13 +670,14 @@ ggplot() +
 dev.off()
 
 
-################ plot the legend
+################################ plot the legend
+
 # https://cran.r-project.org/web/packages/Ternary/vignettes/Ternary.html
 # install.packages('Ternary')
 # Ternary::TernaryApp()
 suppressPackageStartupMessages(library('Ternary'))
 
-png('visualization/01_minutes_share/1.0.1_minutes_share_of_activities_legend.png',
+png('visualization/01_minutes_share/1.2.4_minutes_share_of_activities_legend.png',
     width = 8.8, height = 7.8, units = 'cm', res = 600)
 par(ps = 10, 
     # mai = c(0.01, 0.01, 0.01, 0.01), mar = c(0.01, 0.01, 0.01, 0.01),
@@ -427,7 +698,8 @@ TernaryPlot(
     axis.rotate = FALSE,
     padding = 0.1
     )
-cols <- TernaryPointValues(rgb, resolution = 240L)
+cols <- TernaryPointValues(
+    function (a, b, c) rgb(a/1.5, b, c), resolution = 240L)
 ColourTernary(cols, spectrum = NULL)
 dev.off()
 
